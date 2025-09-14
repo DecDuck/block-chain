@@ -1,0 +1,63 @@
+[package]
+name = "keychainmc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+build_const = { version = "0.2.2", default-features = false }
+# embassy shit
+embassy-executor = { version = "0.7.0", default-features = false, features = [
+  "nightly",
+] }
+embassy-net = { version = "0.6.0", features = [
+  "dhcpv4",
+  "medium-ethernet",
+  "tcp",
+  "udp",
+] }
+embassy-sync = "0.7.2"
+embassy-time = "0.5.0"
+# esp shit
+esp-alloc = "0.8.0"
+esp-backtrace = { version = "0.17.0", features = [
+  "esp32c3",
+  "exception-handler",
+  "panic-handler",
+  "println",
+] }
+esp-bootloader-esp-idf = { version = "0.2.0", features = ["esp32c3"] }
+esp-hal = { version = "1.0.0-rc.0", default-features = false, features = [
+  "esp32c3",
+  "rt",
+  "unstable",
+] }
+esp-hal-embassy = { version = "0.9.0", default-features = false, features = [
+  "esp32c3",
+  "executors",
+] }
+esp-println = { version = "0.15.0", default-features = false, features = [
+  "auto",
+  "esp32c3",
+  "log-04",
+] }
+esp-wifi = { version = "0.15.0", features = ["esp32c3", "log-04", "wifi"] }
+log = { version = "0.4.28", default-features = false }
+mcproto-rs = { version = "0.2.0", default-features = false, features = [
+  "v1_16_3",
+] }
+rsa = { version = "0.10.0-rc.8", default-features = false }
+static_cell = "2.1.1"
+
+[build-dependencies]
+build_const = { version = "0.2.2" }
+
+[patch.crates-io]
+crypto-bigint = { git = "https://github.com/DecDuck/crypto-bigint-syncless.git", branch = "patch" }
+
+[profile.release]
+opt-level = 3
+overflow-checks = false
+lto = "fat"
+incremental = false
+codegen-units = 1
+
