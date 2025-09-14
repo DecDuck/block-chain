@@ -3,8 +3,8 @@ use embassy_time::{Duration, Timer};
 use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState};
 use log::{info, warn};
 
-const SSID: &str = "Hofmeyr";
-const PASSWORD: &str = "ta5ksg4jdq";
+const SSID: &str = env!("SSID");
+const PASSWORD: &str = env!("PASSWORD");
 
 #[embassy_executor::task]
 pub async fn maintain_wifi_connection(mut controller: WifiController<'static>) {

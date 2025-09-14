@@ -10,13 +10,12 @@ mod wifi;
 mod utils;
 mod encryption;
 
-#[macro_use]
-extern crate build_const;
 extern crate alloc;
 
 use embassy_executor::Spawner;
 use embassy_net::{StackResources, tcp::TcpSocket};
 use embassy_time::{Duration, Timer};
+use esp_alloc::HeapStats;
 use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock, gpio::{Level, Output, OutputConfig}, rng::Rng, rsa::Rsa, timer::{systimer::SystemTimer, timg::TimerGroup}
@@ -42,7 +41,7 @@ macro_rules! mk_static {
 #[embassy_executor::task]
 async fn run(mut output: Output<'static>) {
     loop {
-        Timer::after(Duration::from_millis(1_000)).await;
+        Timer::after(Duration::from_millis(5_000)).await;
         output.toggle();
     }
 }
@@ -53,7 +52,6 @@ async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    // 72 kB
     esp_alloc::heap_allocator!(size: 72 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);

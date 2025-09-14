@@ -1,18 +1,22 @@
 use alloc::{borrow::ToOwned as _, string::String, vec::Vec};
 use embassy_net::tcp::TcpSocket;
-use log::info;
+use log::{info, warn};
 use mcproto_rs::{
     Serialize,
     protocol::{HasPacketBody, HasPacketId, State},
     status::{StatusPlayersSpec, StatusSpec, StatusVersionSpec},
-    types::{BytesSerializer, Chat, TextComponent, VarInt},
-    v1_16_3::{
-        HandshakeNextState, LoginDisconnectSpec, LoginEncryptionRequestSpec, Packet753,
+    types::{Chat, CountedArray, VarInt},
+    v1_21_8::{
+        HandshakeIntent, LoginEncryptionRequestSpec, Packet772, PingResponseSpec,
         StatusResponseSpec,
     },
 };
+use rsa::pkcs8::der::Encode;
 
-use crate::utils::{SliceSerializer, text};
+use crate::{
+    encryption::ServerEncryption,
+    utils::{SliceSerializer, text},
+};
 
 const PACKET_WRITE_BUFFER_SIZE: usize = 4096;
 pub const VAR_INT_BUF_SIZE: usize = 5;
@@ -20,19 +24,21 @@ pub const EMPTY_STRING: String = String::new();
 
 pub struct PlayerContext {
     pub state: State,
+    random_key: Option<Vec<u8>>,
 }
 
 impl Default for PlayerContext {
     fn default() -> Self {
         Self {
             state: State::Handshaking,
+            random_key: None,
         }
     }
 }
 
 async fn write_packet(
     socket: &mut TcpSocket<'_>,
-    packet: Packet753,
+    packet: Packet772,
 ) -> Result<(), embassy_net::tcp::Error> {
     let mut serializer_backend = [0u8; PACKET_WRITE_BUFFER_SIZE];
     let mut serializer = SliceSerializer::create(&mut serializer_backend);
@@ -70,30 +76,40 @@ async fn write_packet(
 }
 
 pub async fn process_packet(
-    packet: Packet753,
+    packet: Packet772,
     context: &mut PlayerContext,
     socket: &mut TcpSocket<'_>,
+    encryption: &ServerEncryption<'static>,
 ) -> Result<bool, embassy_net::tcp::Error> {
-    info!("{:?}", packet);
+    // info!("{:?}", packet);
     match packet {
-        Packet753::Handshake(v) => {
-            info!("trying to connect with version: {}", v.version);
+        Packet772::PingRequest(v) => {
+            let response = Packet772::PingResponse(PingResponseSpec { payload: v.payload });
 
-            match v.next_state {
-                HandshakeNextState::Status => {
+            write_packet(socket, response).await?;
+            return Ok(true);
+        }
+        Packet772::Handshake(v) => {
+            info!("trying to connect with version: {}", v.protocol_version);
+
+            match v.intent {
+                HandshakeIntent::Status => {
                     context.state = State::Status;
                 }
-                HandshakeNextState::Login => {
+                HandshakeIntent::Login => {
                     context.state = State::Login;
+                }
+                HandshakeIntent::Transfer => {
+                    warn!("transfer not supported")
                 }
             }
         }
-        Packet753::StatusRequest(spec) => {
-            let response = Packet753::StatusResponse(StatusResponseSpec {
+        Packet772::StatusRequest(_) => {
+            let response = Packet772::StatusResponse(StatusResponseSpec {
                 response: StatusSpec {
                     version: Some(StatusVersionSpec {
-                        name: "1.16.3".to_owned(),
-                        protocol: 753,
+                        name: "1.21.8".to_owned(),
+                        protocol: 772,
                     }),
                     players: StatusPlayersSpec {
                         max: 10,
@@ -104,23 +120,37 @@ pub async fn process_packet(
                         "blockchain - instead of bitcoin, a block game for your key chain!",
                     )),
                     favicon: None,
+                    enforces_secure_chat: false,
                 },
             });
 
             write_packet(socket, response).await?;
             return Ok(true);
         }
-        Packet753::LoginStart(spec) => {
+        Packet772::LoginStart(spec) => {
             info!("{} is connecting...", spec.name);
 
+            let spki = rsa::pkcs8::SubjectPublicKeyInfo::from_key(&encryption.public)
+                .expect("failed to create spki")
+                .to_der()
+                .expect("failed to serialize to der");
+
+            let random = encryption.random_data().await;
+
             let encryption_request =
-                Packet753::LoginEncryptionRequest(LoginEncryptionRequestSpec {
+                Packet772::LoginEncryptionRequest(LoginEncryptionRequestSpec {
                     server_id: EMPTY_STRING,
-                    public_key: todo!(),
-                    verify_token: todo!(),
+                    public_key: CountedArray::from(spki),
+                    verify_token: CountedArray::from(random),
+                    should_authenticate: false,
                 });
+
+            write_packet(socket, encryption_request).await?;
+            return Ok(true);
         }
-        _ => (),
+        _ => {
+            info!("no handler for type {:?}", packet.id());
+        }
     };
 
     Ok(true)

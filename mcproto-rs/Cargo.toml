@@ -1,0 +1,35 @@
+[package]
+name = "mcproto-rs"
+version = "0.2.0"
+authors = ["Joey Sacchini <joey@sacchini.net>"]
+edition = "2018"
+license = "Apache-2.0"
+keywords = ["minecraft", "games", "protocol", "serialziers", "packets"]
+description = "A crate which helps you implement the minecraft protocol, and implements it for you too!"
+homepage = "https://github.com/Twister915/mcproto-rs"
+repository = "https://github.com/Twister915/mcproto-rs"
+readme = "README.md"
+
+[dependencies]
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+base64 = { version = "0.12.3", default-features = false, features = ["alloc"] }
+rand = { version = "0.7", optional = true }
+
+[dependencies.serde]
+version = "1.0.116"
+features = [ "derive", "alloc" ]
+default-features = false
+
+[dev-dependencies]
+flate2 = "1.0.17"
+
+[features]
+default = [ "std", "bench", "v1_15_2", "v1_16_3", "v1_21_8" ]
+
+std = [ "rand" ]
+bench = []
+gat = []
+
+v1_15_2 = []
+v1_16_3 = []
+v1_21_8 = []

@@ -6,21 +6,28 @@ use mcproto_rs::{
     Deserialize as _,
     protocol::{Id, Packet, PacketDirection, RawPacket as _, State},
     types::VarInt,
-    v1_16_3::{Packet753, RawPacket753, RawPacket753Body},
+    v1_21_8::RawPacket772,
 };
 
-use crate::{encryption::ServerEncryption, packet::{process_packet, PlayerContext, VAR_INT_BUF_SIZE}};
+use crate::{
+    encryption::ServerEncryption,
+    packet::{PlayerContext, VAR_INT_BUF_SIZE, process_packet},
+};
 
 const RX_BUFFER_SIZE: usize = 16384;
 const TX_BUFFER_SIZE: usize = 16384;
-const READ_BUF: usize = 4096;
+const READ_BUF: usize = 8128;
+const READ_BUF_MAX: usize = READ_BUF * 2;
 const MAX_PACKET_LENGTH: u32 = 1024 * 64;
 
 static mut RX_BUFFER: [u8; RX_BUFFER_SIZE] = [0; RX_BUFFER_SIZE];
 static mut TX_BUFFER: [u8; TX_BUFFER_SIZE] = [0; TX_BUFFER_SIZE];
 
 #[embassy_executor::task]
-pub async fn start_tcp_server(stack: embassy_net::Stack<'static>, encryption: &'static ServerEncryption<'static>) {
+pub async fn start_tcp_server(
+    stack: embassy_net::Stack<'static>,
+    encryption: &'static ServerEncryption<'static>,
+) {
     loop {
         let mut socket = TcpSocket::new(stack, unsafe { &mut *addr_of_mut!(RX_BUFFER) }, unsafe {
             &mut *addr_of_mut!(TX_BUFFER)
@@ -45,26 +52,30 @@ async fn read_socket(
 ) -> Result<(), embassy_net::tcp::Error> {
     let len = socket.read(&mut buf[*written..]).await?;
     *written += len;
+    if len == 0 {
+        return Err(embassy_net::tcp::Error::ConnectionReset);
+    }
     Ok(())
 }
 
 async fn read_packet_length(
     socket: &mut TcpSocket<'_>,
     read_buf: &mut [u8],
-    used: &mut usize,
-    written_to_amount: &mut usize,
+    read_pointer: &mut usize,
+    write_pointer: &mut usize,
 ) -> Result<u32, embassy_net::tcp::Error> {
     let mut accumulator = 0u32;
     let mut position = 0;
 
     loop {
-        while position >= (*written_to_amount - *used) {
-            read_socket(socket, read_buf, written_to_amount).await?;
+        while *read_pointer >= *write_pointer {
+            read_socket(socket, read_buf, write_pointer).await?;
         }
-        let current_byte = read_buf[position];
+        let current_byte = read_buf[*read_pointer];
+        info!("incorporating a {}, used {}, total {}", current_byte, read_pointer, write_pointer);
         accumulator |= (current_byte as u32 & 0x7f) << (position * 7);
         position += 1;
-        *used += 1;
+        *read_pointer += 1;
         if (current_byte & 0x80) == 0 {
             break;
         }
@@ -80,18 +91,25 @@ pub async fn handle_connection<'a>(
     mut socket: TcpSocket<'a>,
     encryption: &'static ServerEncryption<'static>,
 ) -> Result<(), embassy_net::tcp::Error> {
-    let mut read_buf = [0u8; READ_BUF];
-    let mut written_to = 0;
-    let mut used = 0;
+    let mut read_buf = [0u8; READ_BUF_MAX];
+    let mut write_pointer = 0;
+    let mut read_pointer = 0;
 
     let mut context = PlayerContext::default();
 
     loop {
+        if read_pointer >= READ_BUF {
+            read_buf.copy_within(read_pointer..write_pointer, 0);
+            write_pointer -= read_pointer;
+            read_pointer = 0;
+            info!("reset ring buffer");
+        }
+
         let packet_length = read_packet_length(
             &mut socket,
-            &mut read_buf[used..],
-            &mut used,
-            &mut written_to,
+            &mut read_buf,
+            &mut read_pointer,
+            &mut write_pointer,
         )
         .await?;
 
@@ -100,26 +118,25 @@ pub async fn handle_connection<'a>(
         if packet_length > MAX_PACKET_LENGTH {
             return Err(embassy_net::tcp::Error::ConnectionReset);
         }
-
-        info!("used {} of {}", used, written_to);
-
-        while (written_to - used) < packet_length.try_into().unwrap() {
-            read_socket(&mut socket, &mut read_buf, &mut written_to).await?;
+        if packet_length == 0 {
+            continue;
         }
 
-        let end = used + packet_length as usize;
+        while (write_pointer - read_pointer) < packet_length.try_into().unwrap() {
+            read_socket(&mut socket, &mut read_buf, &mut write_pointer).await?;
+        }
+
+        let end = read_pointer + packet_length as usize;
 
         info!(
             "reading from {} to {} for size of {}",
-            used, end, packet_length
+            read_pointer, end, packet_length
         );
 
-        let packet_id = VarInt::mc_deserialize(&read_buf[used..end])
+        let packet_id = VarInt::mc_deserialize(&read_buf[read_pointer..end])
             .map_err(|_| embassy_net::tcp::Error::ConnectionReset)?;
 
-        used += packet_length as usize;
-
-        info!("reading server-bound packet of id: {}", packet_id.value);
+        read_pointer += packet_length as usize;
 
         let id = Id {
             id: *packet_id.value,
@@ -128,11 +145,12 @@ pub async fn handle_connection<'a>(
         };
 
         let packet =
-            RawPacket753::create(id, packet_id.data).expect("failed to convert to raw packet");
+            RawPacket772::create(id, packet_id.data).expect("failed to convert to raw packet");
         let packet = packet.deserialize();
         match packet {
             Ok(packet) => {
-                let should_continue = process_packet(packet, &mut context, &mut socket).await?;
+                let should_continue =
+                    process_packet(packet, &mut context, &mut socket, &encryption).await?;
                 if !should_continue {
                     break;
                 }

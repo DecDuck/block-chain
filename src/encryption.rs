@@ -6,8 +6,6 @@ use rsa::{
     rand_core::{CryptoRng, RngCore},
 };
 
-build_const!("encryption");
-
 pub struct ServerEncryption<'a> {
     rsa: Rsa<'a, Async>,
     hardware: Mutex<NoopRawMutex, HardwareWrapper>,
@@ -40,7 +38,7 @@ impl<'a> ServerEncryption<'a> {
         let mut hardware_wrapper = HardwareWrapper { rng };
         let private = RsaPrivateKey::new(&mut hardware_wrapper, 1024)
             .expect("failed to generate private key");
-        let public = RsaPublicKey::from(private.clone());
+        let public = private.to_public_key();
         Self {
             hardware: Mutex::new(hardware_wrapper),
             rsa: rsa_peripheral,
@@ -51,8 +49,17 @@ impl<'a> ServerEncryption<'a> {
 
     pub async fn encrypt_data(&self, data: &[u8]) -> Result<Vec<u8>, rsa::Error> {
         let mut hardware_rng = self.hardware.lock().await;
-        let enc_data = self.public.encrypt(&mut hardware_rng, Pkcs1v15Encrypt, data)?;
+        let enc_data = self
+            .public
+            .encrypt(&mut hardware_rng, Pkcs1v15Encrypt, data)?;
 
         Ok(enc_data)
+    }
+
+    pub async fn random_data(&self) -> Vec<u8> {
+        let mut hardware_rng = self.hardware.lock().await;
+        let mut random_buffer = [0u8; 64];
+        hardware_rng.rng.read(&mut random_buffer);
+        random_buffer.to_vec()
     }
 }
