@@ -1,3 +1,8 @@
+use core::mem;
+
+use aes::cipher::AsyncStreamCipher;
+use aes::cipher::BlockEncryptMut;
+use aes::cipher::KeyIvInit;
 use alloc::{borrow::ToOwned as _, string::String, vec::Vec};
 use embassy_net::tcp::TcpSocket;
 use log::{info, warn};
@@ -6,8 +11,9 @@ use mcproto_rs::{
     protocol::{HasPacketBody, HasPacketId, State},
     status::{StatusPlayersSpec, StatusSpec, StatusVersionSpec},
     types::{Chat, CountedArray, VarInt},
+    uuid::UUID4,
     v1_21_8::{
-        HandshakeIntent, LoginEncryptionRequestSpec, Packet772, PingResponseSpec,
+        HandshakeIntent, LoginEncryptionRequestSpec, LoginSuccessSpec, Packet772, PingResponseSpec,
         StatusResponseSpec,
     },
 };
@@ -15,6 +21,7 @@ use rsa::pkcs8::der::Encode;
 
 use crate::{
     encryption::ServerEncryption,
+    errors::MinecraftError,
     utils::{SliceSerializer, text},
 };
 
@@ -22,33 +29,81 @@ const PACKET_WRITE_BUFFER_SIZE: usize = 4096;
 pub const VAR_INT_BUF_SIZE: usize = 5;
 pub const EMPTY_STRING: String = String::new();
 
+struct PlayerLoginContext {
+    verify_token: Option<Vec<u8>>,
+    uuid: UUID4,
+    username: String,
+}
+
+type Aes128Cfb8Enc = cfb8::Encryptor<aes::Aes128>;
+type Aes128Cfb8Dec = cfb8::Decryptor<aes::Aes128>;
+struct PlayerEncryptionContext {
+    encrypter: Aes128Cfb8Enc,
+    decrypter: Aes128Cfb8Dec,
+    shared_token: [u8; 16],
+}
+
+impl PlayerEncryptionContext {
+    pub fn new(shared_token: Vec<u8>) -> Self {
+        info!("token length {}", shared_token.len() * 8);
+        let shared_token: [u8; 16] = shared_token
+            .try_into()
+            .expect("shared token not long enough");
+        Self {
+            encrypter: Aes128Cfb8Enc::new(&shared_token.into(), &shared_token.into()),
+            decrypter: Aes128Cfb8Dec::new(&shared_token.into(), &shared_token.into()),
+            shared_token,
+        }
+    }
+}
+
 pub struct PlayerContext {
     pub state: State,
-    random_key: Option<Vec<u8>>,
+    login_context: Option<PlayerLoginContext>,
+    encryption_context: Option<PlayerEncryptionContext>,
 }
 
 impl Default for PlayerContext {
     fn default() -> Self {
         Self {
             state: State::Handshaking,
-            random_key: None,
+            login_context: None,
+            encryption_context: None,
         }
     }
 }
 
+async fn write_encryption_transparent<const T: usize>(
+    socket: &mut TcpSocket<'_>,
+    context: &mut PlayerContext,
+    slices: [&mut [u8]; T],
+) -> Result<(), MinecraftError> {
+    for slice in slices {
+        if let Some(encryption) = &mut context.encryption_context {
+            for chunk in slice.chunks_mut(1) {
+                encryption.encrypter.encrypt_block_mut(chunk.into());
+            }
+        }
+
+        let mut written = 0;
+
+        while written < slice.len() {
+            written += socket.write(&slice[written..]).await?;
+        }
+    }
+
+    Ok(())
+}
+
 async fn write_packet(
     socket: &mut TcpSocket<'_>,
+    context: &mut PlayerContext,
     packet: Packet772,
-) -> Result<(), embassy_net::tcp::Error> {
+) -> Result<(), MinecraftError> {
     let mut serializer_backend = [0u8; PACKET_WRITE_BUFFER_SIZE];
     let mut serializer = SliceSerializer::create(&mut serializer_backend);
-    packet
-        .id()
-        .mc_serialize(&mut serializer)
-        .map_err(|v| embassy_net::tcp::Error::ConnectionReset)?;
-    packet
-        .mc_serialize_body(&mut serializer)
-        .map_err(|v| embassy_net::tcp::Error::ConnectionReset)?;
+    packet.id().mc_serialize(&mut serializer)?;
+    packet.mc_serialize_body(&mut serializer)?;
 
     let packet = serializer.finish();
 
@@ -60,17 +115,12 @@ async fn write_packet(
         .expect("failed to serialize packet length");
     let packet_len_len = length_serializer.finish().len();
 
-    let mut written = 0;
-    while written < packet_len_len {
-        written += socket
-            .write(&length_serializer_backend[written..packet_len_len])
-            .await?;
-    }
-    written = 0;
-
-    while written < packet.len() {
-        written += socket.write(&packet[written..]).await?;
-    }
+    write_encryption_transparent(
+        socket,
+        context,
+        [&mut length_serializer_backend[..packet_len_len], packet],
+    )
+    .await?;
 
     Ok(())
 }
@@ -80,13 +130,13 @@ pub async fn process_packet(
     context: &mut PlayerContext,
     socket: &mut TcpSocket<'_>,
     encryption: &ServerEncryption<'static>,
-) -> Result<bool, embassy_net::tcp::Error> {
+) -> Result<bool, MinecraftError> {
     // info!("{:?}", packet);
     match packet {
         Packet772::PingRequest(v) => {
             let response = Packet772::PingResponse(PingResponseSpec { payload: v.payload });
 
-            write_packet(socket, response).await?;
+            write_packet(socket, context, response).await?;
             return Ok(true);
         }
         Packet772::Handshake(v) => {
@@ -124,14 +174,13 @@ pub async fn process_packet(
                 },
             });
 
-            write_packet(socket, response).await?;
+            write_packet(socket, context, response).await?;
             return Ok(true);
         }
         Packet772::LoginStart(spec) => {
             info!("{} is connecting...", spec.name);
 
-            let spki = rsa::pkcs8::SubjectPublicKeyInfo::from_key(&encryption.public)
-                .expect("failed to create spki")
+            let spki = rsa::pkcs8::SubjectPublicKeyInfo::from_key(&encryption.public)?
                 .to_der()
                 .expect("failed to serialize to der");
 
@@ -141,11 +190,52 @@ pub async fn process_packet(
                 Packet772::LoginEncryptionRequest(LoginEncryptionRequestSpec {
                     server_id: EMPTY_STRING,
                     public_key: CountedArray::from(spki),
-                    verify_token: CountedArray::from(random),
+                    verify_token: CountedArray::from(random.clone()),
                     should_authenticate: false,
                 });
 
-            write_packet(socket, encryption_request).await?;
+            context.login_context = Some(PlayerLoginContext {
+                verify_token: Some(random),
+                uuid: spec.uuid,
+                username: spec.name,
+            });
+
+            write_packet(socket, context, encryption_request).await?;
+            return Ok(true);
+        }
+        Packet772::LoginEncryptionResponse(spec) => {
+            let login_context = if let Some(login_context) = &mut context.login_context {
+                login_context
+            } else {
+                return Err(MinecraftError::Unauthorized);
+            };
+
+            let verify_token = if let Some(verify_token) = login_context.verify_token.take() {
+                verify_token
+            } else {
+                return Err(MinecraftError::Unauthorized);
+            };
+            let decrypted_verify = encryption.decrypt_data(&spec.verify_token).await?;
+
+            if !decrypted_verify.eq(&verify_token) {
+                return Err(MinecraftError::Unauthorized);
+            }
+
+            let decrypted_secret = encryption.decrypt_data(&spec.shared_secret).await?;
+            context.encryption_context = Some(PlayerEncryptionContext::new(decrypted_secret));
+            info!(
+                "shared token length: {}",
+                mem::size_of::<PlayerEncryptionContext>()
+            );
+
+            // Encryption enabled now because of above
+            let login_success = Packet772::LoginSuccess(LoginSuccessSpec {
+                uuid: login_context.uuid,
+                username: login_context.username.clone(),
+                properties: CountedArray::from(Vec::new()),
+            });
+
+            write_packet(socket, context, login_success).await?;
             return Ok(true);
         }
         _ => {

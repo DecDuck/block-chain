@@ -1,6 +1,6 @@
 use embassy_net::Runner;
 use embassy_time::{Duration, Timer};
-use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState};
+use esp_wifi::wifi::{AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState};
 use log::{info, warn};
 
 const SSID: &str = env!("SSID");
@@ -12,7 +12,7 @@ pub async fn maintain_wifi_connection(mut controller: WifiController<'static>) {
 
     loop {
         match esp_wifi::wifi::wifi_state() {
-            WifiState::StaConnected => {
+            WifiState::StaDisconnected => {
                 // wait for disconnect
                 controller.wait_for_event(WifiEvent::StaDisconnected).await;
                 Timer::after(Duration::from_millis(5000)).await

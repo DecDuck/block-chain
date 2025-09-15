@@ -4,14 +4,13 @@ use embassy_net::tcp::TcpSocket;
 use log::{info, warn};
 use mcproto_rs::{
     Deserialize as _,
-    protocol::{Id, Packet, PacketDirection, RawPacket as _, State},
+    protocol::{Id, PacketDirection, RawPacket as _},
     types::VarInt,
     v1_21_8::RawPacket772,
 };
 
 use crate::{
-    encryption::ServerEncryption,
-    packet::{PlayerContext, VAR_INT_BUF_SIZE, process_packet},
+    encryption::ServerEncryption, errors::MinecraftError, packet::{process_packet, PlayerContext, VAR_INT_BUF_SIZE}
 };
 
 const RX_BUFFER_SIZE: usize = 16384;
@@ -63,7 +62,7 @@ async fn read_packet_length(
     read_buf: &mut [u8],
     read_pointer: &mut usize,
     write_pointer: &mut usize,
-) -> Result<u32, embassy_net::tcp::Error> {
+) -> Result<u32, MinecraftError> {
     let mut accumulator = 0u32;
     let mut position = 0;
 
@@ -72,7 +71,6 @@ async fn read_packet_length(
             read_socket(socket, read_buf, write_pointer).await?;
         }
         let current_byte = read_buf[*read_pointer];
-        info!("incorporating a {}, used {}, total {}", current_byte, read_pointer, write_pointer);
         accumulator |= (current_byte as u32 & 0x7f) << (position * 7);
         position += 1;
         *read_pointer += 1;
@@ -80,7 +78,7 @@ async fn read_packet_length(
             break;
         }
         if position >= VAR_INT_BUF_SIZE {
-            return Err(embassy_net::tcp::Error::ConnectionReset);
+            return Err(MinecraftError::InvalidPacketHeader);
         }
     }
 
@@ -90,7 +88,7 @@ async fn read_packet_length(
 pub async fn handle_connection<'a>(
     mut socket: TcpSocket<'a>,
     encryption: &'static ServerEncryption<'static>,
-) -> Result<(), embassy_net::tcp::Error> {
+) -> Result<(), MinecraftError> {
     let mut read_buf = [0u8; READ_BUF_MAX];
     let mut write_pointer = 0;
     let mut read_pointer = 0;
@@ -116,7 +114,7 @@ pub async fn handle_connection<'a>(
         info!("reading packet of size: {}", packet_length);
 
         if packet_length > MAX_PACKET_LENGTH {
-            return Err(embassy_net::tcp::Error::ConnectionReset);
+            return Err(MinecraftError::InvalidPacketHeader);
         }
         if packet_length == 0 {
             continue;
@@ -133,8 +131,7 @@ pub async fn handle_connection<'a>(
             read_pointer, end, packet_length
         );
 
-        let packet_id = VarInt::mc_deserialize(&read_buf[read_pointer..end])
-            .map_err(|_| embassy_net::tcp::Error::ConnectionReset)?;
+        let packet_id = VarInt::mc_deserialize(&read_buf[read_pointer..end])?;
 
         read_pointer += packet_length as usize;
 

@@ -9,6 +9,7 @@ mod server;
 mod wifi;
 mod utils;
 mod encryption;
+mod errors;
 
 extern crate alloc;
 
@@ -41,7 +42,7 @@ macro_rules! mk_static {
 #[embassy_executor::task]
 async fn run(mut output: Output<'static>) {
     loop {
-        Timer::after(Duration::from_millis(5_000)).await;
+        Timer::after(Duration::from_millis(1_000)).await;
         output.toggle();
     }
 }

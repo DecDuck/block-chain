@@ -39,7 +39,7 @@ impl<'a> SliceSerializer<'a> {
         Self { target, at: 0 }
     }
 
-    pub fn finish(self) -> &'a [u8] {
-        &self.target[..self.at]
+    pub fn finish(self) -> &'a mut [u8] {
+        &mut self.target[..self.at]
     }
 }

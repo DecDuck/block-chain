@@ -56,6 +56,11 @@ impl<'a> ServerEncryption<'a> {
         Ok(enc_data)
     }
 
+    pub async fn decrypt_data(&self, data: &[u8]) -> Result<Vec<u8>, rsa::Error > {
+        let dec_data = self.private.decrypt(Pkcs1v15Encrypt, data)?;
+        Ok(dec_data)
+    }
+
     pub async fn random_data(&self) -> Vec<u8> {
         let mut hardware_rng = self.hardware.lock().await;
         let mut random_buffer = [0u8; 64];
