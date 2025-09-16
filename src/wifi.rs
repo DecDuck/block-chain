@@ -8,8 +8,6 @@ const PASSWORD: &str = env!("PASSWORD");
 
 #[embassy_executor::task]
 pub async fn maintain_wifi_connection(mut controller: WifiController<'static>) {
-    info!("device capabilities: {:?}", controller.capabilities());
-
     loop {
         match esp_wifi::wifi::wifi_state() {
             WifiState::StaDisconnected => {
@@ -46,6 +44,6 @@ pub async fn maintain_wifi_connection(mut controller: WifiController<'static>) {
 }
 
 #[embassy_executor::task]
-pub async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
+pub async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) -> ! {
     runner.run().await
 }

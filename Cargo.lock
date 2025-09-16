@@ -102,12 +102,14 @@ dependencies = [
  "embassy-net",
  "embassy-sync 0.7.2",
  "embassy-time 0.5.0",
+ "embedded-storage",
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
  "esp-hal",
  "esp-hal-embassy",
  "esp-println",
+ "esp-storage",
  "esp-wifi",
  "log",
  "mcproto-rs",
@@ -829,6 +831,17 @@ dependencies = [
  "cfg-if",
  "document-features",
  "esp-metadata-generated",
+]
+
+[[package]]
+name = "esp-storage"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f276ad8a3bdc6b47cd92a3e91013f2e42dce9b3fc5023392063387a1ce2ed69a"
+dependencies = [
+ "document-features",
+ "embedded-storage",
+ "esp-rom-sys",
 ]
 
 [[package]]

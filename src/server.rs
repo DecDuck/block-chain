@@ -1,16 +1,18 @@
 use core::ptr::addr_of_mut;
 
+use aes::cipher::BlockDecryptMut;
 use embassy_net::tcp::TcpSocket;
 use log::{info, warn};
 use mcproto_rs::{
     Deserialize as _,
-    protocol::{Id, PacketDirection, RawPacket as _},
+    protocol::{Id, PacketDirection, PacketErr, RawPacket as _},
     types::VarInt,
     v1_21_8::RawPacket772,
 };
 
 use crate::{
-    encryption::ServerEncryption, errors::MinecraftError, packet::{process_packet, PlayerContext, VAR_INT_BUF_SIZE}
+    encryption::ServerEncryption,
+    errors::MinecraftError, packets::{process_packet, PlayerContext, VAR_INT_BUF_SIZE},
 };
 
 const RX_BUFFER_SIZE: usize = 16384;
@@ -46,6 +48,7 @@ pub async fn start_tcp_server(
 
 async fn read_socket(
     socket: &mut TcpSocket<'_>,
+    context: &mut PlayerContext,
     buf: &mut [u8],
     written: &mut usize,
 ) -> Result<(), embassy_net::tcp::Error> {
@@ -54,11 +57,17 @@ async fn read_socket(
     if len == 0 {
         return Err(embassy_net::tcp::Error::ConnectionReset);
     }
+    if let Some(encryption) = &mut context.encryption_context {
+        for block in &mut buf[(*written - len)..(*written)].chunks_mut(1) {
+            encryption.decrypter.decrypt_block_mut(block.into());
+        }
+    }
     Ok(())
 }
 
 async fn read_packet_length(
     socket: &mut TcpSocket<'_>,
+    context: &mut PlayerContext,
     read_buf: &mut [u8],
     read_pointer: &mut usize,
     write_pointer: &mut usize,
@@ -68,7 +77,7 @@ async fn read_packet_length(
 
     loop {
         while *read_pointer >= *write_pointer {
-            read_socket(socket, read_buf, write_pointer).await?;
+            read_socket(socket, context, read_buf, write_pointer).await?;
         }
         let current_byte = read_buf[*read_pointer];
         accumulator |= (current_byte as u32 & 0x7f) << (position * 7);
@@ -105,13 +114,12 @@ pub async fn handle_connection<'a>(
 
         let packet_length = read_packet_length(
             &mut socket,
+            &mut context,
             &mut read_buf,
             &mut read_pointer,
             &mut write_pointer,
         )
         .await?;
-
-        info!("reading packet of size: {}", packet_length);
 
         if packet_length > MAX_PACKET_LENGTH {
             return Err(MinecraftError::InvalidPacketHeader);
@@ -121,7 +129,7 @@ pub async fn handle_connection<'a>(
         }
 
         while (write_pointer - read_pointer) < packet_length.try_into().unwrap() {
-            read_socket(&mut socket, &mut read_buf, &mut write_pointer).await?;
+            read_socket(&mut socket, &mut context, &mut read_buf, &mut write_pointer).await?;
         }
 
         let end = read_pointer + packet_length as usize;
@@ -141,8 +149,14 @@ pub async fn handle_connection<'a>(
             direction: PacketDirection::ServerBound,
         };
 
-        let packet =
-            RawPacket772::create(id, packet_id.data).expect("failed to convert to raw packet");
+        let packet = match RawPacket772::create(id, packet_id.data) {
+            Ok(v) => v,
+            Err(PacketErr::UnknownId(id)) => {
+                warn!("unknown packet recieved: {:?}", id);
+                continue;
+            }
+            Err(err) => return Err(err.into()),
+        };
         let packet = packet.deserialize();
         match packet {
             Ok(packet) => {

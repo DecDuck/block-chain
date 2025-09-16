@@ -3,29 +3,39 @@
 #![feature(impl_trait_in_assoc_type)]
 #![feature(type_alias_impl_trait)]
 #![feature(generic_const_exprs)]
+#![feature(int_roundings)]
 
-mod packet;
-mod server;
-mod wifi;
-mod utils;
+mod discovery;
 mod encryption;
 mod errors;
+mod packets;
+mod server;
+mod utils;
+mod wifi;
+mod world;
 
 extern crate alloc;
 
 use embassy_executor::Spawner;
-use embassy_net::{StackResources, tcp::TcpSocket};
+use embassy_net::StackResources;
 use embassy_time::{Duration, Timer};
-use esp_alloc::HeapStats;
 use esp_backtrace as _;
 use esp_hal::{
-    clock::CpuClock, gpio::{Level, Output, OutputConfig}, rng::Rng, rsa::Rsa, timer::{systimer::SystemTimer, timg::TimerGroup}
+    clock::CpuClock,
+    gpio::{Level, Output, OutputConfig},
+    rng::Rng,
+    rsa::Rsa,
+    timer::{systimer::SystemTimer, timg::TimerGroup},
 };
 use esp_wifi::EspWifiController;
 use log::{info, warn};
 
 use crate::{
-    encryption::ServerEncryption, server::start_tcp_server, wifi::{maintain_wifi_connection, net_task}
+    discovery::start_discovery_server,
+    encryption::ServerEncryption,
+    server::start_tcp_server,
+    wifi::{maintain_wifi_connection, net_task},
+    world::World,
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -71,6 +81,12 @@ async fn main(spawner: Spawner) {
 
     let wifi_interface = interfaces.sta;
 
+    let mut world = World::new();
+    info!(
+        "remaining updates: {:?}",
+        world.calculate_remaining_updates()
+    );
+
     controller
         .set_power_saving(esp_wifi::config::PowerSaveMode::None)
         .expect("failed to set power saving");
@@ -114,6 +130,10 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(start_tcp_server(stack, encryption))
         .expect("failed to start tcp server");
+
+    spawner
+        .spawn(start_discovery_server(stack))
+        .expect("failed to start discovery server");
 
     loop {
         Timer::after(Duration::from_millis(5_000)).await;

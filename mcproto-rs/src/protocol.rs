@@ -22,6 +22,7 @@ pub enum State {
     Handshaking,
     Status,
     Login,
+    Configuration,
     Play,
 }
 
@@ -31,6 +32,7 @@ impl State {
         match self {
             Handshaking => "Handshaking",
             Status => "Status",
+            Configuration => "Configuration",
             Login => "Login",
             Play => "Play",
         }

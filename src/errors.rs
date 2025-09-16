@@ -1,4 +1,4 @@
-use mcproto_rs::{DeserializeErr, SerializeErr};
+use mcproto_rs::{protocol::PacketErr, DeserializeErr, SerializeErr};
 
 #[derive(Debug)]
 pub enum MinecraftError {
@@ -7,6 +7,7 @@ pub enum MinecraftError {
     DeserializeError(DeserializeErr),
     EncryptionError(rsa::Error),
     CertificateParsingError(rsa::pkcs8::spki::Error),
+    PacketErr(PacketErr),
     InvalidPacketHeader,
     Unauthorized,
 }
@@ -38,5 +39,11 @@ impl From<rsa::pkcs8::spki::Error> for MinecraftError {
 impl From<DeserializeErr> for MinecraftError {
     fn from(value: DeserializeErr) -> Self {
         MinecraftError::DeserializeError(value)
+    }
+}
+
+impl From<PacketErr> for MinecraftError {
+    fn from(value: PacketErr) -> Self {
+        MinecraftError::PacketErr(value)
     }
 }
