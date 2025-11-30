@@ -33,9 +33,9 @@ type WorldPositionType = u8; // 256 * 16 blocks
 pub struct World {
     flash: FlashRegion<'static, FlashStorage>,
     max_update_count: u32,
-    reserved_data_offset_bytes: u32,
-    reserved_fill_offset_bytes: u32,
-    data_offset_bytes: u32,
+    start_of_block_data: u32,
+    start_of_unreserved_fill_markers: u32,
+    start_of_unreserved_block_data: u32,
 }
 
 impl World {
@@ -81,9 +81,11 @@ impl World {
             info!("cleared world");
         }
 
+        // The number of reserved updates we need to store
         let mut reserved: u32 = WorldPositionType::MAX.into();
         reserved += 1;
         reserved *= reserved;
+        info!("reserving {} for world chunk start", reserved);
         let reserve_aligned_bytes = reserved.div_ceil(8);
 
         if reserved >= block_updates {
@@ -92,7 +94,7 @@ impl World {
 
         let data_offset = fill_marker_length + (reserved * BLOCK_UPDATE_SIZE);
         info!(
-            "total world size: {total} of {partition_size} [{fill_marker_length}b fill map then {}b data, {block_updates} updates of {}b]. losing {} bytes. unreserved data starts at {data_offset}",
+            "total world size: {total} of {partition_size} [{fill_marker_length}b fill map then {}b data, {block_updates} updates of {}b]. losing {} bytes. unreserved fill markers start at {reserve_aligned_bytes}. unreserved block data starts at {data_offset}",
             block_updates * BLOCK_UPDATE_SIZE,
             BLOCK_UPDATE_SIZE,
             partition_size - total
@@ -101,9 +103,9 @@ impl World {
         Self {
             flash: world,
             max_update_count: block_updates,
-            reserved_data_offset_bytes: fill_marker_length, // End of the fill markers
-            reserved_fill_offset_bytes: reserve_aligned_bytes,
-            data_offset_bytes: data_offset,
+            start_of_block_data: fill_marker_length, // End of the fill markers
+            start_of_unreserved_fill_markers: reserve_aligned_bytes,
+            start_of_unreserved_block_data: data_offset,
         }
     }
 
@@ -111,22 +113,24 @@ impl World {
         let mut bytes = [0u8; CHUNKED_READ_ALIGNMENT];
 
         // From the start of the reserved fill markers to the end of the fill markers (start of data)
-        for offset in (self.reserved_fill_offset_bytes..self.reserved_data_offset_bytes)
+        for offset in (self.start_of_unreserved_fill_markers..self.start_of_block_data)
             .step_by(CHUNKED_READ_ALIGNMENT)
         {
             self.flash
                 .read(offset as u32, &mut bytes)
                 .expect("failed to read");
 
-            let to_use =
-                CHUNKED_READ_ALIGNMENT.min((self.reserved_data_offset_bytes - offset) as usize);
+            // Make sure we don't read block data
+            let to_use = CHUNKED_READ_ALIGNMENT.min((self.start_of_block_data - offset) as usize);
 
             // If one of them has 0s
-            for byte_i in 0..to_use {
-                if bytes[byte_i] != u8::MAX {
+            for byte_index in 0..to_use {
+                let bit_position = offset + byte_index as u32;
+                info!("checking {bit_position}...");
+                if bytes[byte_index] != u8::MAX {
                     for v in 0..8 {
-                        if bytes[byte_i] & (0b1 << v) == 0 {
-                            return BlockUpdatePointer::from_u32(offset * 8 + byte_i as u32);
+                        if bytes[byte_index] & (0b1 << v) == 0 {
+                            return BlockUpdatePointer::from_u32(self.start_of_block_data + bit_position * 8 * BLOCK_UPDATE_SIZE);
                         }
                     }
                 }
@@ -137,7 +141,7 @@ impl World {
     }
 
     fn mark_space_filled(&mut self, pointer: u32) {
-        let pointer = pointer - self.reserved_data_offset_bytes;
+        let pointer = pointer - self.start_of_block_data;
         let byte_offset = pointer.div_floor(8);
         let bit_offset = pointer - byte_offset * 8;
 
@@ -157,6 +161,7 @@ impl World {
 
     pub fn write_block_update(&mut self, pointer: BlockUpdatePointer, value: BlockUpdate) {
         let memory_offset = pointer.to_u32() * BLOCK_UPDATE_SIZE;
+        info!("writing to memory offset of {}", memory_offset);
         let raw_bytes: [u8; BLOCK_UPDATE_SIZE as usize] = unsafe { core::mem::transmute(value) };
         self.flash
             .write(memory_offset, &raw_bytes)

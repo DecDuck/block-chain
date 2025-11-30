@@ -85,17 +85,16 @@ async fn main(spawner: Spawner) {
 
     let mut world = World::new();
     let pointer = world.find_free_space();
-    /*world.write_block_update(
+    world.write_block_update(
         pointer,
         BlockUpdate {
             pos: PackedChunkPosition::new(0, 0, 0),
             block: BlockType::DIRT,
-            run_length: 100,
             next: BlockUpdatePointer::from_u32(0),
             chunk_x: 0,
             chunk_z: 0,
         },
-    );*/
+    );
     let next = world.find_free_space();
     info!("next: {}", next.to_u32());
 
