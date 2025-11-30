@@ -19,13 +19,13 @@ impl PackedChunkPosition {
     }
 
     pub fn new(x: u8, y: u8, z: u8) -> Self {
-        let mut v: u16 = 0;
-        v |= x as u16;
-        v |= (z << 4) as u16;
-        let mut v_y: u16 = y.into();
-        v_y <<= 8;
-        v |= v_y;
-        PackedChunkPosition(v)
+        let mut chunk: u16 = 0;
+        chunk |= x as u16;
+        chunk |= (z << 4) as u16;
+        let mut chunk_y: u16 = y.into();
+        chunk_y <<= 8;
+        chunk |= chunk_y;
+        PackedChunkPosition(chunk)
     }
 }
 
