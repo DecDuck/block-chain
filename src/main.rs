@@ -35,7 +35,9 @@ use crate::{
     encryption::ServerEncryption,
     server::start_tcp_server,
     wifi::{maintain_wifi_connection, net_task},
-    world::World,
+    world::{
+        block::{BlockType, BlockUpdate, BlockUpdatePointer, PackedChunkPosition}, World
+    },
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -82,10 +84,20 @@ async fn main(spawner: Spawner) {
     let wifi_interface = interfaces.sta;
 
     let mut world = World::new();
-    info!(
-        "remaining updates: {:?}",
-        world.calculate_remaining_updates()
-    );
+    let pointer = world.find_free_space();
+    /*world.write_block_update(
+        pointer,
+        BlockUpdate {
+            pos: PackedChunkPosition::new(0, 0, 0),
+            block: BlockType::DIRT,
+            run_length: 100,
+            next: BlockUpdatePointer::from_u32(0),
+            chunk_x: 0,
+            chunk_z: 0,
+        },
+    );*/
+    let next = world.find_free_space();
+    info!("next: {}", next.to_u32());
 
     controller
         .set_power_saving(esp_wifi::config::PowerSaveMode::None)

@@ -2,6 +2,8 @@ use core::u16;
 
 use log::info;
 
+use crate::world::WorldPositionType;
+
 pub struct PackedChunkPosition(u16);
 
 impl PackedChunkPosition {
@@ -29,13 +31,34 @@ impl PackedChunkPosition {
 
 #[repr(u16)]
 pub enum BlockType {
-    AIR = 0,
+    NONE = 0,
+    AIR = 1,
+    STONE = 2,
+    DIRT = 3,
+
+}
+
+#[repr(C, packed(1))]
+#[derive(Clone, Copy)]
+pub struct BlockUpdatePointer([u8; 3]);
+
+impl BlockUpdatePointer {
+    pub fn from_u32(value: u32) -> Self {
+        let [n1, n2, n3, _] = value.to_le_bytes();
+        Self([n1, n2, n3])
+    }
+
+    pub fn to_u32(self) -> u32 {
+        let value = u32::from_le_bytes([self.0[0], self.0[1], self.0[2], 0]);
+        value
+    }
 }
 
 #[repr(C, packed(1))]
 pub struct BlockUpdate {
-    pos: PackedChunkPosition,
-    block: BlockType,
-    run_length: u16,
-    next: *mut BlockUpdate
+    pub pos: PackedChunkPosition,
+    pub block: BlockType,
+    pub next: BlockUpdatePointer,
+    pub chunk_x: WorldPositionType,
+    pub chunk_z: WorldPositionType,
 }

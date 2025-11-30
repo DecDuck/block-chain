@@ -1,9 +1,11 @@
 use alloc::{borrow::ToOwned as _, vec::Vec};
 use embassy_net::tcp::TcpSocket;
 use log::{info, warn};
-use mcproto_rs::{protocol::State, status::{StatusPlayersSpec, StatusSpec, StatusVersionSpec}, types::Chat, v1_21_8::{HandshakeIntent, Packet772, PingResponseSpec, StatusResponseSpec}};
+use mcproto_rs::{protocol::State, status::{StatusFaviconSpec, StatusPlayersSpec, StatusSpec, StatusVersionSpec}, types::Chat, v1_21_8::{HandshakeIntent, Packet772, PingResponseSpec, StatusResponseSpec}};
 
 use crate::{encryption::ServerEncryption, errors::MinecraftError, packets::{write_packet, PlayerContext}, utils::text};
+
+const FAVICON: &[u8; 2765] = include_bytes!("./favicon.png");
 
 pub async fn handle_status_packets(
     packet: Packet772,
@@ -11,6 +13,7 @@ pub async fn handle_status_packets(
     socket: &mut TcpSocket<'_>,
     encryption: &ServerEncryption<'static>,
 ) -> Result<(Option<Packet772>, bool), MinecraftError> {
+    let favicon_vec = FAVICON.to_vec();
     match packet {
         Packet772::PingRequest(v) => {
             let response = Packet772::PingResponse(PingResponseSpec { payload: v.payload });
@@ -50,7 +53,10 @@ pub async fn handle_status_packets(
                     description: Chat::Text(text(
                         "blockchain - instead of bitcoin, a block game for your key chain!",
                     )),
-                    favicon: None,
+                    favicon: Some(StatusFaviconSpec {
+                        content_type: "image/png".to_owned(),
+                        data: favicon_vec,
+                    }),
                     enforces_secure_chat: false,
                 },
             });
